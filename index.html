@@ -1308,13 +1308,39 @@ function renderInviteBadge() {
         '<div style="height:16px"></div>';
 }
 
+// ==========================================
+// CORREÇÃO: Cache-busting + erro seguro
+// ==========================================
 async function fetchUsedCount(email) {
     try {
-        var res = await fetch(CONFIG.webhookUrl + "?action=count&email=" + encodeURIComponent(email));
-        if (!res.ok) return 0;
+        // Adiciona timestamp para evitar cache do navegador/CDN
+        var url = CONFIG.webhookUrl + "?action=count&email=" + encodeURIComponent(email) + "&_t=" + Date.now();
+        
+        var res = await fetch(url, {
+            method: "GET",
+            cache: "no-store",  // Força não usar cache
+            headers: {
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        });
+        
+        if (!res.ok) {
+            console.error("Erro ao consultar convites:", res.status);
+            // Em caso de erro de rede/servidor, bloqueia por segurança
+            return CONFIG.maxInvites;
+        }
+        
         var data = await res.json();
+        console.log("Convites usados para", email, ":", data);
         return parseInt(data.count || data.used || 0, 10);
-    } catch(e) { return 0; }
+        
+    } catch(e) {
+        console.error("Falha na verificação de convites:", e);
+        // Em caso de erro, bloqueia por segurança (não libera convites extras)
+        return CONFIG.maxInvites;
+    }
 }
 
 async function verifyAccess() {
@@ -1355,10 +1381,18 @@ async function submitGuest() {
     if (email.indexOf("@") === -1) {
         showFeedback("Digite um e-mail v\u00e1lido para o convidado.", "error"); return;
     }
-    if (serverCount >= CONFIG.maxInvites) {
-        showFeedback("Limite de convites atingido.", "error");
-        btn.disabled = true; return;
+    
+    // ==========================================
+    // CORREÇÃO: Re-verificar contagem antes de enviar
+    // ==========================================
+    var freshCount = await fetchUsedCount(currentUser);
+    if (freshCount >= CONFIG.maxInvites) {
+        showFeedback("Limite de convites atingido. Voc\u00ea j\u00e1 usou todos os " + CONFIG.maxInvites + " convites.", "error");
+        btn.disabled = true;
+        return;
     }
+    serverCount = freshCount; // Atualiza com valor mais recente
+    
     btn.disabled = true;
     btn.innerHTML = '<div class="loader"></div><span>Enviando convite...</span>';
     showFeedback("Processando...", "info");
